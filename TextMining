@@ -1,0 +1,653 @@
+
+
+# ONE:
+#1) Extract tweets for any user (try choosing a user who has more tweets)
+#2) Perform sentimental analysis on the tweets extracted from the above
+
+
+##################################  1  #####################################
+
+#devtools::install_github("jrowen/twitteR", ref = "oauth_httr_1_0")
+library("twitteR")
+
+#install.packages("ROAuth")
+library("ROAuth")
+
+cred <- OAuthFactory$new(consumerKey='FXTquJNbgDG2dH81XYVqNZFAb', # Consumer Key (API Key)
+                         consumerSecret='3y0ALNFzJ8JKyxzFd0ba9FWSUpNSWhPisEIZOB6WCTtcGvP6SO', #Consumer Secret (API Secret)
+                         requestURL='https://api.twitter.com/oauth/request_token',
+                         accessURL='https://api.twitter.com/oauth/access_token',
+                         authURL='https://api.twitter.com/oauth/authorize')
+#cred$handshake(cainfo="cacert.pem")
+save(cred, file="twitter authentication.Rdata")
+
+load("twitter authentication.Rdata")
+
+#install.packages("base64enc")
+library(base64enc)
+
+#install.packages("httpuv")
+library(httpuv)
+
+twitteR:::setup_twitter_oauth("FXTquJNbgDG2dH81XYVqNZFAb", # Consumer Key (API Key)
+                    "3y0ALNFzJ8JKyxzFd0ba9FWSUpNSWhPisEIZOB6WCTtcGvP6SO", #Consumer Secret (API Secret)
+                    "529590041-qOXLd769cQEUTbXg3iRqCd33pC1K6xoORrGOMJDh",  # Access Token
+                    "WlqZJwXFQzf64IuojkbKh1jdT5cnSY8U44pqmz6Sc1d4A")  #Access Token Secret
+
+#registerTwitterOAuth(cred)
+
+Tweets <-userTimeline('narendramodi', n=3200,includeRts = T)
+TweetsDF <- twListToDF(Tweets)
+dim(TweetsDF)
+View(TweetsDF)
+
+write.csv(TweetsDF, "Tweets.csv",row.names = F)
+
+getwd()
+# 
+# handleTweetsDF <- twListToDF(handleTweets)
+# dim(handleTweetsDF)
+# View(handleTweetsDF)
+# #handleTweetsMessages <- unique(handleTweetsDF$text)
+# #handleTweetsMessages <- as.data.frame(handleTweetsMessages)
+# #write.csv(handleTweetsDF, "TefalHandleTweets.csv")
+
+####################################  2  ########################################
+
+library(RCurl)
+library(httr)
+library(tm)
+library(wordcloud)
+library(syuzhet)
+library(rtweet)
+
+# CLEANING TWEETS
+
+TweetsDF$text=gsub("&amp", "", TweetsDF$text)
+TweetsDF$text = gsub("&amp", "", TweetsDF$text)
+TweetsDF$text = gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", TweetsDF$text)
+TweetsDF$text = gsub("@\\w+", "", TweetsDF$text)
+TweetsDF$text = gsub("[[:punct:]]", "", TweetsDF$text)
+TweetsDF$text = gsub("[[:digit:]]", "", TweetsDF$text)
+TweetsDF$text = gsub("http\\w+", "", TweetsDF$text)
+TweetsDF$text = gsub("[ \t]{2,}", "", TweetsDF$text)
+TweetsDF$text = gsub("^\\s+|\\s+$", "", TweetsDF$text)
+TweetsDF$text <- iconv(TweetsDF$text, "UTF-8", "ASCII", sub="")
+
+# Emotions for each tweet using NRC dictionary
+emotions <- get_nrc_sentiment(TweetsDF$text)
+emo_bar = colSums(emotions)
+emo_sum = data.frame(count=emo_bar, emotion=names(emo_bar))
+emo_sum$emotion = factor(emo_sum$emotion, levels=emo_sum$emotion[order(emo_sum$count, decreasing = TRUE)])
+
+# Visualize the emotions from NRC sentiments
+library(plotly)
+p <- plot_ly(emo_sum, x=~emotion, y=~count, type="bar", color=~emotion) %>%
+  layout(xaxis=list(title=""), showlegend=FALSE,
+         title="Emotion Type for hashtag: narendramodi")
+api_create(p,filename="Sentimentanalysis")
+
+# Create comparison word cloud data
+
+wordcloud_tweet = c(
+  paste(TweetsDF$text[emotions$anger > 0], collapse=" "),
+  paste(TweetsDF$text[emotions$anticipation > 0], collapse=" "),
+  paste(TweetsDF$text[emotions$disgust > 0], collapse=" "),
+  paste(TweetsDF$text[emotions$fear > 0], collapse=" "),
+  paste(TweetsDF$text[emotions$joy > 0], collapse=" "),
+  paste(TweetsDF$text[emotions$sadness > 0], collapse=" "),
+  paste(TweetsDF$text[emotions$surprise > 0], collapse=" "),
+  paste(TweetsDF$text[emotions$trust > 0], collapse=" ")
+)
+
+# create corpus
+corpus = Corpus(VectorSource(wordcloud_tweet))
+
+# remove punctuation, convert every word in lower case and remove stop words
+
+corpus = tm_map(corpus, tolower)
+corpus = tm_map(corpus, removePunctuation)
+corpus = tm_map(corpus, removeWords, c(stopwords("english")))
+corpus = tm_map(corpus, stemDocument)
+
+# create document term matrix
+
+tdm = TermDocumentMatrix(corpus)
+
+# convert as matrix
+tdm = as.matrix(tdm)
+tdmnew <- tdm[nchar(rownames(tdm)) < 11,]
+
+# column name binding
+colnames(tdm) = c('anger', 'anticipation', 'disgust', 'fear', 'joy', 'sadness', 'surprise', 'trust')
+colnames(tdmnew) <- colnames(tdm)
+comparison.cloud(tdmnew, random.order=FALSE,
+                 colors = c("#00B2FF", "red", "#FF0099", "#6600CC", "green", "orange", "blue", "brown"),
+                 title.size=1, max.words=250, scale=c(2.5, 0.4),rot.per=0.4)
+
+################################################################
+
+
+#TWO:
+#1) Extract reviews of any product from ecommerce website like snapdeal and amazon
+#2) Perform sentimental analysis
+
+
+#######################################  1  ######################################
+library(rvest)
+library(XML)
+library(magrittr)
+
+#################### Amazon Reviews #############################
+aurl <- "https://www.amazon.in/Apple-iPhone-11-128GB-Product/dp/B07XVLHPMF/ref=sr_1_3?dchild=1&keywords=apple+iphone+11&qid=1588434196&s=apparel&sr=8-3"
+amazon_reviews <- NULL
+for (i in 1:10){
+  murl <- read_html(as.character(paste(aurl,i,sep="=")))  # Use html()
+  murl
+  rev <- murl %>%
+    html_nodes(".review-text") %>%
+    html_text()
+  amazon_reviews <- c(amazon_reviews,rev)
+  View (amazon_reviews)
+}
+write.table(amazon_reviews,"apple11.txt",row.names = F)
+
+
+#############################  2  ###################################
+####  sentimental analysis on the reviews of another product  ####
+
+
+#we read the file into R
+library(dplyr)
+library(readr)
+library(rjson)
+#install.packages("tidyjson")
+#library(tidyjson)
+
+
+baby_file <- "Baby_5.json"
+
+
+#read_lines creates character vector for each line
+review_lines <- read_lines(baby_file, progress = FALSE)
+
+#urn this into a tibble with columns 
+#for the reviews and accompanying metadata.
+
+
+library(stringr)
+library(jsonlite)
+
+reviews_combined <- str_c("[", str_c(review_lines, collapse = ", "), "]")
+
+#flatten and turn into a tibble
+df_reviews <- fromJSON(reviews_combined) %>%
+  flatten() %>%
+  tbl_df()
+
+#Let's check out a sample of the tibble 
+#to verify the format is as intended.
+
+
+library(kableExtra)
+
+#Limiting the tibble to 5 rows here because otherwise kable will process whole thing
+kable(df_reviews[1:5,]) %>%
+  kable_styling("striped", full_width = F) 
+
+
+#So this looks good. 
+#We have our "reviewText" column for sentiment analysis, 
+#and the 1-to-5 scaled rating 
+#in the "overall" variable.
+
+#the tidytext package - tidy principles dictate that 
+#in a data set, each variable is a column, each observation a row, 
+#and each manner of observational unit a table. 
+#As she states, tidy data sets are easier to work with, 
+#and this is no less true when one starts to work with text
+
+
+#the essence of the tidy text format is 
+#a data frame or tibble with one token, 
+#usually just a word, per row. 
+#The tidytext package includes a function 
+#called "unnest_tokens" that will convert 
+#the text into individual tokens, words.
+
+#The Amazon dataset does not have
+#a unique identifier for reviews, 
+#so let's create one while 
+#there is still one row per review.
+
+
+
+df_reviews <- df_reviews %>% mutate(reviewID = row_number())
+
+#unnest the text column
+
+
+library(tidytext)
+
+df_reviews_words <- df_reviews %>%
+  #only new subset of columns for our exercise
+  select(asin,reviewID,reviewText,overall) %>%
+  #see https://www.rdocumentation.org/packages/tidytext/versions/0.2.0/topics/unnest_tokens
+  unnest_tokens(word,reviewText) %>%
+  #following Robinson,s example, we are running a NOT IN on stop words and formatting
+  #could also use an antijoin here
+  filter(!word %in% stop_words$word,
+         str_detect(word,"^[a-z']+$"))
+
+
+#we went from 160,000 rows (reviews) 
+#to more than 5 million rows (words). 
+#We're only keeping the asin (a product ID), 
+#our created unique reviewID, the now unnested reviewText - 
+#which has become "word," and then the "overall" or rating. 
+#Let's take a closer look.
+
+
+library(kableExtra)
+
+#Limiting the tibble to 5 rows here because otherwise kable will process whole thing
+kable(df_reviews_words[1:5,]) %>%
+  kable_styling("striped", full_width = F) 
+
+#progress to sentiment analysis
+#Sentiment analysis utilizes certain lexicons, 
+#which are ways of assigning values to words or phrases. 
+#For our ratings purposes, the AFINN lexicon will be used, 
+#as it provides scores for words on a scale 
+#of -5 (negative) to 5 (most positive).
+
+
+#First, we create a tibble from the sentiments table 
+#that comes with tidytext that only contains 
+#the values for the AFINN lexicon.
+
+AFINN_lex_sent <- sentiments %>%
+  filter(lexicon == "AFINN") %>%
+  select(word, afinn_score = score)
+
+#join that tibble with the AFINN lexicon 
+#to our tidy text table of Amazon reviews.
+
+AFINN_reviews_sentiment <- df_reviews_words %>%
+  inner_join(AFINN_lex_sent, by = "word") %>%
+  group_by(reviewID, overall) %>%
+  summarize(sentiment = mean(afinn_score))
+
+#Previewing it.
+
+library(kableExtra)
+
+#Limiting the tibble to 20 rows here because otherwise kable will process whole thing
+kable(AFINN_reviews_sentiment[1:20,]) %>%
+  kable_styling("striped", full_width = F) 
+
+#Just in those first 20 rows, 
+#we see AFINN values that are all over the map, 
+#including some negative scores on reviews accompanied by 
+#five-star ratings. This could get interesting
+
+#Again, stealing blatantly from the work others, 
+#let's create a summary table and box plots 
+#that show the mean sentiment scores by star rating
+
+
+library("data.table")
+
+dt_ars <- data.table(AFINN_reviews_sentiment)
+dt_ars <- dt_ars[,list(mean=mean(sentiment),sd=sd(sentiment)),by=overall]
+dt_ars[order(overall)]
+
+library(ggplot2)
+
+ggplot(AFINN_reviews_sentiment, aes(overall, sentiment, group = overall)) + geom_boxplot()
+
+#There's a clear relative correlation between 
+#the aggregate AFINN sentiment score of a review 
+#and its star rating. 
+#However, the effect is not nearly as significant 
+
+#Just for fun
+#let's take a look at a couple of outliers
+#First, the one-star reviews with a sentiment rating about 3.75.
+
+AFINN_reviews_sentiment_outlier_1 <- AFINN_reviews_sentiment %>%
+  filter(overall == 1 & sentiment > 3.75) %>%
+  select(reviewID)
+
+df_reviews_outlier_low <- df_reviews %>%
+  select(reviewID,reviewText,overall) %>%
+  #converting tibble column to list so it works in "IN" filter predicate
+  filter(reviewID %in% as.list(AFINN_reviews_sentiment_outlier_1$reviewID))
+
+kable(df_reviews_outlier_low) %>%
+  kable_styling("striped", full_width = F) 
+
+#We see a clear mistaken one-star review (reviewID3367)
+#We have multiple interesting cases where a reviewer dismisses 
+#the product they bought but then goes on to offer 
+#extended praise for an alternative product
+#Also, there are some clearly negative reviews 
+#that just don't use many negative words, like reviewID 41486.
+
+#Next, let's examine the five-star review that came in with a sentiment rating below -3.75
+
+AFINN_reviews_sentiment_outlier_5 <- AFINN_reviews_sentiment %>%
+  filter(overall == 5 & sentiment < -3.75) %>%
+  select(reviewID)
+
+df_reviews_outlier_high <- df_reviews %>%
+  select(reviewID,reviewText,overall) %>%
+  #converting tibble column to list so it works in "IN" filter predicate
+  filter(reviewID %in% as.list(AFINN_reviews_sentiment_outlier_5$reviewID))
+
+kable(df_reviews_outlier_high) %>%
+  kable_styling("striped", full_width = F) 
+
+#Just one outlier here
+#Going back to our original unnested tidy text tibble entries 
+#for that review,
+#take a look at how individual words in it scored 
+#on the AFINN lexicon
+
+df_reviews_words %>%
+  inner_join(AFINN_lex_sent, by = "word") %>%
+  filter(reviewID == 2668)
+
+#We could prevent cases like this by removing 
+#capitalized words that don't occur at the beginning of sentences
+#the review only contained one word with an AFINN score
+#The below tells us that only 2,476 words have sentiment scores 
+#from the AFINN lexicon, so that seems plausible
+
+sentiments %>%
+  filter(lexicon=="AFINN")
+
+#many examples of a negative review for a baby product 
+#turning into a recommendation for another product or solution
+
+######################################################################################
+
+#THREE:
+#1) Extract movie reviews for any movie from IMDB and perform sentimental analysis
+#2) Extract anything you choose from the internet and do some research on how we extract using R
+#Programming and perform sentimental analysis
+
+
+########################  1  ######################################
+
+
+#Extracted the Customer reviews from IMDB on the movie "The Jungle Book"
+#and performed Sentimental analysis on the same.
+
+library(rvest)
+library(XML)
+library(magrittr)
+library(tm)
+library(wordcloud)
+library(wordcloud2)
+library(syuzhet)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(reshape2)
+library(dplyr)
+
+####################### IMDBReviews #############################
+aurl <- "https://www.imdb.com/title/tt0061852/reviews?ref_=tt_urv"
+IMDB_reviews <- NULL
+for (i in 1:10){
+  murl <- read_html(as.character(paste(aurl,i,sep="=")))
+  rev <- murl %>%
+    html_nodes(".show-more__control") %>%
+    html_text()
+  IMDB_reviews <- c(IMDB_reviews,rev)
+}
+length(IMDB_reviews)
+
+
+write.table(IMDB_reviews,"TheJungleBook.txt",row.names = F)
+
+
+TheJungleBook <- read.delim('TheJungleBook.txt')
+str(TheJungleBook)
+
+View(TheJungleBook)
+
+# Build Corpus and DTM/TDM
+library(tm)
+corpus <- TheJungleBook[-1,]
+head(corpus)
+
+class(corpus)
+
+corpus <- Corpus(VectorSource(corpus))
+inspect(corpus[1:5])
+
+# Clean the text 
+
+corpus <- tm_map(corpus,tolower)
+inspect(corpus[1:5])
+corpus <- tm_map(corpus,removePunctuation)
+inspect(corpus[1:5])
+
+corpus <- tm_map(corpus,removeNumbers)
+inspect(corpus[1:5])
+
+corpus_clean<-tm_map(corpus,stripWhitespace)
+inspect(corpus[1:5])
+
+cleanset<-tm_map(corpus,removeWords, stopwords('english'))
+inspect(cleanset[1:5])
+
+removeURL <- function(x) gsub('http[[:alnum:]]*','',x)
+cleanset <- tm_map(cleanset, content_transformer(removeURL))
+inspect(cleanset[1:5])
+
+cleanset<-tm_map(cleanset,removeWords, c('can','film'))
+cleanset<-tm_map(cleanset,removeWords, c('movie','movies'))
+
+# Removing the word movie and movies on similar grounds - as unnecessary
+
+cleanset <- tm_map(cleanset, gsub,pattern = 'character', replacement = 'characters')
+inspect(cleanset[1:5])
+
+cleanset <- tm_map(cleanset,stripWhitespace)
+inspect(cleanset[1:5])
+
+#Term Document Matrix :
+# Convert the unstructured data to structured data 
+
+tdm <- TermDocumentMatrix(cleanset)
+tdm
+
+tdm <- as.matrix(tdm)
+tdm[1:10,1:20]
+
+# Bar Plot
+
+w <- rowSums(tdm)  # provides the no of times a particular word has been used.
+w <- subset(w, w>= 50) # Pull words that were used more than 25 times.
+barplot(w, las = 2, col = rainbow(50))
+
+# Word Cloud :
+
+library(wordcloud)
+w <- sort(rowSums(tdm), decreasing = TRUE) # Sort words in decreasing order.
+set.seed(123)
+wordcloud(words = names(w), freq = w, 
+          max.words = 250,random.order = F,
+          min.freq =  3, 
+          colors = brewer.pal(8, 'Dark2'),
+          scale = c(5,0.3),
+          rot.per = 0.6)
+
+library(wordcloud2)
+w <- data.frame(names(w),w)
+colnames(w) <- c('word','freq')
+wordcloud2(w,size = 0.5, shape = 'triangle', rotateRatio = 0.5, 
+           minSize = 1)
+
+# lettercloud 
+
+letterCloud(w,word = 'A',frequency(5), size=1)
+
+# Sentiment Analysis
+
+library(syuzhet)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(reshape2)
+library(dplyr)
+#install.packages("syuzhet")
+
+# Read File 
+IMDB_reviews <- read.delim('TheJungleBook.TXT')
+reviews <- as.character(IMDB_reviews[-1,])
+class(reviews)
+
+# Obtain Sentiment scores
+
+s <- get_nrc_sentiment(reviews)
+head(s)
+
+reviews[4]
+
+get_nrc_sentiment('splendid')
+get_nrc_sentiment('no words') 
+
+# barplot
+
+barplot(colSums(s), las = 2.5, col = rainbow(10),
+        ylab = 'Count',main= 'Sentiment scores for IMDB Reviews
+        for TheJungleBook')
+
+##############################  2  #####################################
+
+#importlibraries 'janeaustenr', 'stringr'
+#The janeaustenr package will provide us with 
+#the textual data in the form of books
+# authored by the novelist Jane Austen
+#Tidytext will allow us to perform efficient text analysis
+# on our data
+#convert the text of our books into a tidy format
+# using unnest_tokens() function
+
+
+#install.packages("janeaustenr")
+library(janeaustenr)
+library(stringr)
+#install.packages("tidytext")
+library(tidytext)
+library(dplyr)
+tidy_data <- austen_books() %>%
+  group_by(book) %>%
+  mutate(linenumber = row_number(),
+         chapter = cumsum(str_detect(text, regex("^chapter [\\divxlc]", 
+                                                 ignore_case = TRUE)))) %>%
+  ungroup() %>%
+  unnest_tokens(word, text)
+
+
+#We have performed the tidy operation on our text such that
+#each row contains a single word
+#now make use of the "bing" lexicon and
+#implement filter() over the words that correspond to joy.
+#use the book Sense and Sensibility and derive its words
+#to implement out sentiment analysis model
+
+
+positive_senti <- get_sentiments("bing") %>%
+  filter(sentiment == "positive")
+tidy_data %>%
+  filter(book == "Emma") %>%
+  semi_join(positive_senti) %>%
+  count(word, sort = TRUE)
+
+
+#use spread() function to segregate our data into 
+#separate columns of positive and negative sentiments
+#use the mutate() function to calculate the total sentiment
+#that is, 
+#the difference between positive and negative sentiment
+
+
+library(tidyr)
+bing <- get_sentiments("bing")
+Emma_sentiment <- tidy_data %>%
+  inner_join(bing) %>%
+  count(book = "Emma" , index = linenumber %/% 80, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+
+
+#visualize the words present in the book "Emma"
+#based on their corrosponding positive and negative scores
+
+
+library(ggplot2)
+ggplot(Emma_sentiment, aes(index, sentiment, fill = book)) +
+  geom_bar(stat = "identity", show.legend = TRUE) +
+  facet_wrap(~book, ncol = 2, scales = "free_x")
+
+
+#counting the most common positive and negative words
+#that are present in the novel
+
+
+counting_words <- tidy_data %>%
+  inner_join(bing) %>%
+  count(word, sentiment, sort = TRUE)
+head(counting_words)
+
+
+#perform visualization of sentiment score
+#plot the scores along the axis that is labeled with
+#both positive as well as negative words
+#use ggplot() function
+#to visualize our data based on their scores
+
+
+counting_words %>%
+  filter(n > 150) %>%
+  mutate(n = ifelse(sentiment == "negative", -n, n)) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment))+
+  geom_col() +
+  coord_flip() +
+  labs(y = "Sentiment Score")
+
+
+#let us create a wordcloud that will delineate 
+#the most recurring positive and negative words
+#use the cloud() function
+#to plot both negative and positive words in a single wordcloud
+
+
+library(reshape2)
+library(wordcloud)
+tidy_data %>%
+  inner_join(bing) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("red", "dark green"),
+                   max.words = 100)
+
+#This word cloud efficiently visualize
+#the negative as well as positive groups of data
+#to see the different groups of data
+#based on their corresponding sentiments
+
+
+#learnt about the concept of sentiment analysis and
+#implemented it over the dataset of Jane Austen's books
+#to delineate it through various visualizations
+#after we performed data wrangling on our data.
+#used a lexical analyzer - 'bing' in this instance
+#also represented the sentiment score through a plot and
+#also made a visual report of wordcloud.
